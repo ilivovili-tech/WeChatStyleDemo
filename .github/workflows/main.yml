@@ -1,67 +1,46 @@
-
 name: Build WeChatStyleDemo IPA
 
 on:
-  workflow_dispatch:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-latest
 
     steps:
-      - name: Checkout source
+      - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Check repository files
-        run: |
-          pwd
-          ls -la
-          find . -maxdepth 3 -type f
 
       - name: Select Xcode
         run: |
-          xcodebuild -version
-          xcodebuild -showsdks
+          sudo xcode-select -s /Applications/Xcode.app
 
-      - name: Install XcodeGen
-        run: |
-          brew install xcodegen
-          xcodegen --version
+      - name: Show Xcode Version
+        run: xcodebuild -version
 
-      - name: Check project configuration
-        run: |
-          test -f project.yml
-          cat project.yml
-
-      - name: Generate Xcode project
-        run: |
-          xcodegen generate --spec project.yml
-          ls -la WeChatStyleDemo.xcodeproj
-
-      - name: Build iOS app
+      - name: Resolve Packages
         run: |
           xcodebuild \
-            -project WeChatStyleDemo.xcodeproj \
+            -resolvePackageDependencies
+
+      - name: Build
+        run: |
+          xcodebuild \
             -scheme WeChatStyleDemo \
             -configuration Release \
-            -sdk iphoneos \
-            -derivedDataPath build \
-            CODE_SIGNING_ALLOWED=NO \
-            build
+            -destination generic/platform=iOS \
+            clean build \
+            CODE_SIGNING_ALLOWED=NO
 
-      - name: Package IPA
+      - name: Archive App
         run: |
-          mkdir -p Payload
-          cp -R build/Build/Products/Release-iphoneos/WeChatStyleDemo.app Payload/
-          /usr/bin/ditto -c -k --sequesterRsrc --keepParent Payload WeChatStyleDemo-unsigned.zip
-          mv WeChatStyleDemo-unsigned.zip WeChatStyleDemo-unsigned.ipa
+          mkdir -p output
 
-      - name: Upload IPA
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: WeChatStyleDemo-IPA
-          path: WeChatStyleDemo-unsigned.ipa
-          retention-days: 7
+          name: app-build
+          path: output
