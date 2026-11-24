@@ -1,0 +1,56 @@
+
+name: Build WeChatStyleDemo IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Check files
+        run: |
+          pwd
+          ls -la
+          find . -maxdepth 3 -type f
+
+      - name: Install XcodeGen
+        run: |
+          brew install xcodegen
+
+      - name: Generate Xcode project
+        run: |
+          test -f project.yml
+          xcodegen generate --spec project.yml
+
+      - name: Build iOS app
+        run: |
+          xcodebuild \
+            -project WeChatStyleDemo.xcodeproj \
+            -scheme WeChatStyleDemo \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Package IPA
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/WeChatStyleDemo.app Payload/
+          cd Payload
+          zip -r ../WeChatStyleDemo-unsigned.ipa WeChatStyleDemo.app
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: WeChatStyleDemo-IPA
+          path: WeChatStyleDemo-unsigned.ipa
+          retention-days: 7
