@@ -8,9 +8,13 @@ import Combine
 
 @main
 struct WeChatStyleDemoApp: App {
+    @StateObject private var store = ChatStore()
+
     var body: some Scene {
         WindowGroup {
             MainView()
+                .environmentObject(store)
+                .preferredColorScheme(.light)
         }
     }
 }
@@ -260,13 +264,18 @@ final class ChatStore: ObservableObject {
 
 struct MainView: View {
 
-    @StateObject private var store = ChatStore()
+    @EnvironmentObject private var store: ChatStore
+
     @State private var selectedTab = 0
-    @State private var dragOffset: CGFloat = 0
 
     @Namespace private var tabAnimation
 
-    private let tabNames = ["微信", "通讯录", "发现", "我"]
+    private let tabNames = [
+        "微信",
+        "通讯录",
+        "发现",
+        "我"
+    ]
 
     private let tabIcons = [
         "message",
@@ -276,160 +285,99 @@ struct MainView: View {
     ]
 
     var body: some View {
-        GeometryReader { geometry in
-            VStack(spacing: 0) {
+        VStack(spacing: 0) {
 
-                // MARK: Page Container
+            // Native swipeable pages
 
-                ZStack(alignment: .leading) {
-                    HStack(spacing: 0) {
+            TabView(selection: $selectedTab) {
 
-                        ChatListView(store: store)
-                            .frame(width: geometry.size.width)
+                ChatListView(store: store)
+                    .tag(0)
 
-                        ContactsView(store: store)
-                            .frame(width: geometry.size.width)
+                ContactsView(store: store)
+                    .tag(1)
 
-                        MomentsView(store: store)
-                            .frame(width: geometry.size.width)
+                MomentsView(store: store)
+                    .tag(2)
 
-                        ProfileView()
-                            .frame(width: geometry.size.width)
-                    }
-                    .frame(
-                        width: geometry.size.width * 4,
-                        alignment: .leading
-                    )
-                    .offset(
-                        x: -CGFloat(selectedTab) * geometry.size.width
-                            + dragOffset
-                    )
-                }
-                .frame(width: geometry.size.width)
-                .frame(maxHeight: .infinity)
-                .clipped()
-                .contentShape(Rectangle())
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 20)
-                        .onChanged { value in
-                            let horizontal = value.translation.width
-                            let vertical = value.translation.height
+                ProfileView()
+                    .tag(3)
+            }
+            .tabViewStyle(
+                .page(indexDisplayMode: .never)
+            )
+            .animation(
+                .interactiveSpring(
+                    response: 0.35,
+                    dampingFraction: 0.86
+                ),
+                value: selectedTab
+            )
 
-                            guard abs(horizontal) > abs(vertical) * 1.2 else {
-                                return
-                            }
+            // Custom bottom navigation
 
-                            var movement = horizontal
+            HStack(spacing: 0) {
+                ForEach(0..<4, id: \.self) { index in
 
-                            if selectedTab == 0 && movement > 0 {
-                                movement *= 0.25
-                            }
-
-                            if selectedTab == 3 && movement < 0 {
-                                movement *= 0.25
-                            }
-
-                            dragOffset = movement
+                    Button {
+                        withAnimation(
+                            .spring(
+                                response: 0.32,
+                                dampingFraction: 0.8
+                            )
+                        ) {
+                            selectedTab = index
                         }
-                        .onEnded { value in
-                            let horizontal = value.translation.width
-                            let vertical = value.translation.height
+                    } label: {
 
-                            let isHorizontal =
-                                abs(horizontal) > abs(vertical) * 1.2
+                        VStack(spacing: 5) {
 
-                            withAnimation(
-                                .interactiveSpring(
-                                    response: 0.32,
-                                    dampingFraction: 0.82
-                                )
-                            ) {
-                                if isHorizontal {
-                                    if horizontal < -70 {
-                                        selectedTab = min(
-                                            selectedTab + 1,
-                                            3
+                            ZStack {
+                                if selectedTab == index {
+                                    Capsule()
+                                        .fill(
+                                            Color.green.opacity(0.15)
                                         )
-                                    } else if horizontal > 70 {
-                                        selectedTab = max(
-                                            selectedTab - 1,
-                                            0
+                                        .matchedGeometryEffect(
+                                            id: "selectedTab",
+                                            in: tabAnimation
                                         )
-                                    }
                                 }
 
-                                dragOffset = 0
-                            }
-                        }
-                )
-
-                // MARK: Custom Bottom Navigation
-
-                HStack(spacing: 0) {
-                    ForEach(0..<4, id: \.self) { index in
-                        Button {
-                            withAnimation(
-                                .spring(
-                                    response: 0.32,
-                                    dampingFraction: 0.78
+                                Image(
+                                    systemName: tabIcons[index]
                                 )
-                            ) {
-                                selectedTab = index
-                                dragOffset = 0
+                                .font(.system(size: 20))
+                                .foregroundStyle(
+                                    selectedTab == index
+                                    ? Color.green
+                                    : Color.gray
+                                )
                             }
-                        } label: {
-                            VStack(spacing: 5) {
-                                ZStack {
-                                    if selectedTab == index {
-                                        Capsule()
-                                            .fill(
-                                                Color.green.opacity(0.15)
-                                            )
-                                            .matchedGeometryEffect(
-                                                id: "selectedTab",
-                                                in: tabAnimation
-                                            )
-                                    }
+                            .frame(height: 30)
 
-                                    Image(
-                                        systemName: tabIcons[index]
-                                    )
-                                    .font(.system(size: 20))
-                                    .foregroundStyle(
-                                        selectedTab == index
-                                        ? Color.green
-                                        : Color.gray
-                                    )
-                                }
-                                .frame(height: 30)
-
-                                Text(tabNames[index])
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(
-                                        selectedTab == index
-                                        ? Color.green
-                                        : Color.gray
-                                    )
-                            }
-                            .frame(maxWidth: .infinity)
-                            .contentShape(Rectangle())
+                            Text(tabNames[index])
+                                .font(.system(size: 11))
+                                .foregroundStyle(
+                                    selectedTab == index
+                                    ? Color.green
+                                    : Color.gray
+                                )
                         }
-                        .buttonStyle(.plain)
+                        .frame(maxWidth: .infinity)
+                        .contentShape(Rectangle())
                     }
-                }
-                .padding(.top, 9)
-                .padding(.bottom, 5)
-                .background(.ultraThinMaterial)
-                .overlay(alignment: .top) {
-                    Rectangle()
-                        .fill(Color.gray.opacity(0.15))
-                        .frame(height: 0.5)
+                    .buttonStyle(.plain)
                 }
             }
-            .frame(
-                width: geometry.size.width,
-                height: geometry.size.height
-            )
+            .padding(.top, 9)
+            .padding(.bottom, 5)
+            .background(.ultraThinMaterial)
+            .overlay(alignment: .top) {
+                Rectangle()
+                    .fill(Color.gray.opacity(0.15))
+                    .frame(height: 0.5)
+            }
         }
         .tint(.green)
     }
@@ -486,6 +434,7 @@ struct ChatListView: View {
                 ForEach(filteredChats) { chat in
                     NavigationLink(value: chat.id) {
                         HStack(spacing: 12) {
+
                             DemoAvatar(name: chat.name)
 
                             VStack(
