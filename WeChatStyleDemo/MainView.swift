@@ -4,6 +4,8 @@ import PhotosUI
 import UIKit
 import Combine
 
+// MARK: - App
+
 @main
 struct WeChatStyleDemoApp: App {
     @StateObject private var store = ChatStore()
@@ -12,18 +14,19 @@ struct WeChatStyleDemoApp: App {
         WindowGroup {
             MainView()
                 .environmentObject(store)
+                .preferredColorScheme(.light)
         }
     }
 }
 
-// MARK: - Data Models
+// MARK: - Models
 
 struct DemoMessage: Identifiable, Codable {
     var id = UUID()
     var text: String
     var incoming: Bool
     var time = Date()
-    var imagePath: String?
+    var imagePath: String? = nil
 }
 
 struct DemoChat: Identifiable, Codable {
@@ -35,19 +38,17 @@ struct DemoChat: Identifiable, Codable {
 
     var lastMessage: String {
         guard let message = messages.last else {
-            return "开始聊天"
+            return "暂无消息"
         }
-        return message.imagePath != nil ? "[图片]" : message.text
+        return message.imagePath == nil ? message.text : "[图片]"
     }
 }
 
 struct DemoMoment: Identifiable, Codable {
     var id = UUID()
-    var name: String
-    var avatar: String
     var text: String
-    var time = Date()
     var imagePath: String?
+    var time = Date()
 }
 
 struct SavedData: Codable {
@@ -55,7 +56,7 @@ struct SavedData: Codable {
     var moments: [DemoMoment]
 }
 
-// MARK: - Local Data Store
+// MARK: - Data Store
 
 @MainActor
 final class ChatStore: ObservableObject {
@@ -64,34 +65,43 @@ final class ChatStore: ObservableObject {
 
     private let fileName = "wechat_demo_data.json"
 
-    private var documentsURL: URL {
+    private var dataURL: URL {
         FileManager.default.urls(
             for: .documentDirectory,
             in: .userDomainMask
-        )[0]
+        )[0].appendingPathComponent(fileName)
     }
 
-    private var dataURL: URL {
-        documentsURL.appendingPathComponent(fileName)
-    }
+    private var mediaDirectory: URL {
+        let url = FileManager.default.urls(
+            for: .documentDirectory,
+            in: .userDomainMask
+        )[0].appendingPathComponent("Media")
 
-    private var mediaURL: URL {
-        documentsURL.appendingPathComponent(
-            "Media",
-            isDirectory: true
+        try? FileManager.default.createDirectory(
+            at: url,
+            withIntermediateDirectories: true
         )
+
+        return url
     }
 
     init() {
-        createMediaFolder()
         load()
-    }
 
-    private func createMediaFolder() {
-        try? FileManager.default.createDirectory(
-            at: mediaURL,
-            withIntermediateDirectories: true
-        )
+        if chats.isEmpty {
+            chats = [
+                DemoChat(
+                    name: "文件传输助手",
+                    avatar: "📁"
+                ),
+                DemoChat(
+                    name: "演示联系人",
+                    avatar: "😊"
+                )
+            ]
+            save()
+        }
     }
 
     func load() {
@@ -102,30 +112,6 @@ final class ChatStore: ObservableObject {
                 from: data
             )
         else {
-            chats = [
-                DemoChat(
-                    name: "文件传输助手",
-                    avatar: "📁",
-                    messages: [
-                        DemoMessage(
-                            text: "欢迎使用微信风格演示应用！",
-                            incoming: true
-                        )
-                    ]
-                ),
-                DemoChat(
-                    name: "演示联系人",
-                    avatar: "😊",
-                    messages: [
-                        DemoMessage(
-                            text: "你好，欢迎体验 3.1 版本。",
-                            incoming: true
-                        )
-                    ]
-                )
-            ]
-            moments = []
-            save()
             return
         }
 
@@ -147,79 +133,72 @@ final class ChatStore: ObservableObject {
     }
 
     func saveImage(_ data: Data) -> String? {
-        createMediaFolder()
+        let name = UUID().uuidString + ".jpg"
+        let url = mediaDirectory.appendingPathComponent(name)
 
-        guard
-            let image = UIImage(data: data),
-            let compressed = image.jpegData(
-                compressionQuality: 0.85
-            )
+        guard let image = UIImage(data: data),
+              let compressed = image.jpegData(compressionQuality: 0.85)
         else {
             return nil
         }
 
-        let name = UUID().uuidString + ".jpg"
-        let url = mediaURL.appendingPathComponent(name)
-
         do {
-            try compressed.write(to: url, options: .atomic)
+            try compressed.write(to: url)
             return name
         } catch {
             return nil
         }
     }
 
-    func imageURL(for name: String?) -> URL? {
-        guard let name else { return nil }
-        return mediaURL.appendingPathComponent(name)
+    func imageURL(_ name: String) -> URL {
+        mediaDirectory.appendingPathComponent(name)
     }
 
-    func addContact(name: String) {
-        let cleanName = name.trimmingCharacters(
+    func addContact(_ name: String) {
+        let value = name.trimmingCharacters(
             in: .whitespacesAndNewlines
         )
 
-        guard !cleanName.isEmpty else { return }
-        guard !chats.contains(where: { $0.name == cleanName }) else {
+        guard !value.isEmpty else { return }
+
+        guard !chats.contains(where: { $0.name == value }) else {
             return
         }
 
         chats.insert(
-            DemoChat(name: cleanName, avatar: "🙂"),
+            DemoChat(name: value, avatar: "👤"),
             at: 0
         )
 
         save()
     }
 
-    func sendText(_ text: String, to chatID: UUID) {
-        let cleanText = text.trimmingCharacters(
+    func sendText(_ text: String, to id: UUID) {
+        let value = text.trimmingCharacters(
             in: .whitespacesAndNewlines
         )
 
-        guard
-            !cleanText.isEmpty,
-            let index = chats.firstIndex(where: { $0.id == chatID })
+        guard !value.isEmpty,
+              let index = chats.firstIndex(where: { $0.id == id })
         else {
             return
         }
 
         chats[index].messages.append(
             DemoMessage(
-                text: cleanText,
+                text: value,
                 incoming: false
             )
         )
 
         chats[index].updatedAt = Date()
-        moveChatToTop(chatID)
+        moveChatToTop(id)
         save()
     }
 
-    func sendImage(_ data: Data, to chatID: UUID) {
-        guard
-            let path = saveImage(data),
-            let index = chats.firstIndex(where: { $0.id == chatID })
+    func sendImage(_ data: Data, to id: UUID) {
+        guard let path = saveImage(data),
+              let index = chats.firstIndex(where: { $0.id == id })
         else {
             return
         }
@@ -233,37 +212,24 @@ final class ChatStore: ObservableObject {
         )
 
         chats[index].updatedAt = Date()
-        moveChatToTop(chatID)
+        moveChatToTop(id)
         save()
     }
 
-    private func moveChatToTop(_ id: UUID) {
-        guard let index = chats.firstIndex(
-            where: { $0.id == id }
-        ) else {
-            return
-        }
+    func publishMoment(_ text: String, imageData: Data?) {
+        let path = imageData.flatMap { saveImage($0) }
 
-        let chat = chats.remove(at: index)
-        chats.insert(chat, at: 0)
-    }
-
-    func publishMoment(text: String, imageData: Data?) {
-        let cleanText = text.trimmingCharacters(
+        let value = text.trimmingCharacters(
             in: .whitespacesAndNewlines
         )
 
-        guard !cleanText.isEmpty || imageData != nil else {
+        guard !value.isEmpty || path != nil else {
             return
         }
 
-        let path = imageData.flatMap { saveImage($0) }
-
         moments.insert(
             DemoMoment(
-                name: "我",
-                avatar: "🙂",
-                text: cleanText,
+                text: value,
                 imagePath: path
             ),
             at: 0
@@ -271,110 +237,109 @@ final class ChatStore: ObservableObject {
 
         save()
     }
+
+    func moveChatToTop(_ id: UUID) {
+        guard let index = chats.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+
+        let chat = chats.remove(at: index)
+        chats.insert(chat, at: 0)
+    }
+
+    func deleteChat(_ id: UUID) {
+        chats.removeAll { $0.id == id }
+        save()
+    }
+}
+
+// MARK: - Liquid Glass Style
+
+extension View {
+    func liquidGlass<S: Shape>(
+        in shape: S
+    ) -> some View {
+        modifier(LiquidGlassModifier(shape: shape))
+    }
+}
+
+struct LiquidGlassModifier<S: Shape>: ViewModifier {
+    let shape: S
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.glassEffect(
+                .regular,
+                in: shape
+            )
+        } else {
+            content.background(
+                .ultraThinMaterial,
+                in: shape
+            )
+            .overlay {
+                shape.stroke(
+                    Color.white.opacity(0.5),
+                    lineWidth: 1
+                )
+            }
+        }
+    }
+}
+
+struct AppBackground: View {
+    var body: some View {
+        ZStack {
+            Color(
+                red: 0.91,
+                green: 0.95,
+                blue: 0.99
+            )
+
+            LinearGradient(
+                colors: [
+                    Color.white.opacity(0.85),
+                    Color.blue.opacity(0.08),
+                    Color.purple.opacity(0.06)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        }
+        .ignoresSafeArea()
+    }
 }
 
 // MARK: - Main Navigation
 
-struct MainView: View {
-    @EnvironmentObject private var store: ChatStore
+enum MainTab: String, CaseIterable {
+    case wechat = "微信"
+    case contacts = "通讯录"
+    case discover = "发现"
+    case me = "我"
 
-    @State private var selectedTab = 0
+    var icon: String {
+        switch self {
+        case .wechat: return "message.fill"
+        case .contacts: return "person.2.fill"
+        case .discover: return "safari.fill"
+        case .me: return "person.crop.circle.fill"
+        }
+    }
+}
+
+struct MainView: View {
+    @EnvironmentObject var store: ChatStore
+
+    @State private var selectedTab: MainTab = .wechat
     @State private var selectedChatID: UUID?
     @State private var searchText = ""
+    @State private var showAddContact = false
+    @State private var newContactName = ""
 
-    var body: some View {
-        TabView(selection: $selectedTab) {
-            chatList
-                .tabItem {
-                    Label("微信", systemImage: "message.fill")
-                }
-                .tag(0)
-
-            contactsPage
-                .tabItem {
-                    Label(
-                        "通讯录",
-                        systemImage: "person.crop.rectangle"
-                    )
-                }
-                .tag(1)
-
-            discoverPage
-                .tabItem {
-                    Label("发现", systemImage: "safari")
-                }
-                .tag(2)
-
-            profilePage
-                .tabItem {
-                    Label(
-                        "我",
-                        systemImage: "person.crop.circle"
-                    )
-                }
-                .tag(3)
-        }
-        .tint(Color(
-            red: 0.07,
-            green: 0.72,
-            blue: 0.35
-        ))
-        .sheet(
-            isPresented: Binding(
-                get: { selectedChatID != nil },
-                set: { isPresented in
-                    if !isPresented {
-                        selectedChatID = nil
-                    }
-                }
-            )
-        ) {
-            if let chatID = selectedChatID {
-                ChatDetailView(chatID: chatID)
-                    .environmentObject(store)
-            }
-        }
-    }
-
-    private var chatList: some View {
-        NavigationStack {
-            List {
-                ForEach(filteredChats) { chat in
-                    Button {
-                        selectedChatID = chat.id
-                    } label: {
-                        ChatRow(chat: chat)
-                    }
-                    .buttonStyle(.plain)
-                }
-                .onDelete(perform: deleteChats)
-            }
-            .listStyle(.plain)
-            .navigationTitle("微信")
-            .searchable(
-                text: $searchText,
-                prompt: "搜索"
-            )
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Button(
-                            "添加联系人",
-                            systemImage: "person.badge.plus"
-                        ) {
-                            selectedTab = 1
-                        }
-                    } label: {
-                        Image(systemName: "plus.circle")
-                            .font(.title3)
-                    }
-                }
-            }
-        }
-    }
-
-    private var filteredChats: [DemoChat] {
-        guard !searchText.isEmpty else {
+    var filteredChats: [DemoChat] {
+        if searchText.isEmpty {
             return store.chats
         }
 
@@ -383,164 +348,344 @@ struct MainView: View {
         }
     }
 
-    private func deleteChats(at offsets: IndexSet) {
-        let ids = offsets.map { filteredChats[$0].id }
+    var body: some View {
+        ZStack {
+            AppBackground()
 
-        store.chats.removeAll {
-            ids.contains($0.id)
+            VStack(spacing: 0) {
+                Group {
+                    switch selectedTab {
+                    case .wechat:
+                        chatList
+
+                    case .contacts:
+                        contactsPage
+
+                    case .discover:
+                        MomentsView()
+
+                    case .me:
+                        profilePage
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                bottomBar
+            }
         }
+        .sheet(
+            isPresented: Binding(
+                get: { selectedChatID != nil },
+                set: { value in
+                    if !value {
+                        selectedChatID = nil
+                    }
+                }
+            )
+        ) {
+            if let id = selectedChatID {
+                ChatDetailView(chatID: id)
+                    .environmentObject(store)
+            }
+        }
+        .alert("添加联系人", isPresented: $showAddContact) {
+            TextField("输入联系人名称", text: $newContactName)
 
-        store.save()
+            Button("取消", role: .cancel) {
+                newContactName = ""
+            }
+
+            Button("添加") {
+                store.addContact(newContactName)
+                newContactName = ""
+            }
+        }
     }
 
-    private var contactsPage: some View {
-        NavigationStack {
-            List {
-                Section {
-                    Label(
-                        "新的朋友",
-                        systemImage: "person.badge.plus"
-                    )
-                    Label("群聊", systemImage: "person.2")
-                    Label("标签", systemImage: "tag")
-                    Label("公众号", systemImage: "building.2")
-                }
+    // MARK: Chat List
 
-                Section("联系人") {
+    private var chatList: some View {
+        VStack(spacing: 14) {
+            header(
+                title: "微信",
+                action: {
+                    showAddContact = true
+                }
+            )
+
+            searchBar
+
+            if filteredChats.isEmpty {
+                Spacer()
+                Image(systemName: "message")
+                    .font(.system(size: 42))
+                    .foregroundStyle(.secondary)
+
+                Text("没有找到聊天")
+                    .foregroundStyle(.secondary)
+                Spacer()
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 10) {
+                        ForEach(filteredChats) { chat in
+                            Button {
+                                selectedChatID = chat.id
+                            } label: {
+                                ChatRow(chat: chat)
+                            }
+                            .buttonStyle(.plain)
+                            .contextMenu {
+                                Button(
+                                    "删除聊天",
+                                    role: .destructive
+                                ) {
+                                    store.deleteChat(chat.id)
+                                }
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 20)
+                }
+            }
+        }
+    }
+
+    // MARK: Contacts
+
+    private var contactsPage: some View {
+        VStack(spacing: 14) {
+            header(
+                title: "通讯录",
+                action: {
+                    showAddContact = true
+                }
+            )
+
+            ScrollView {
+                LazyVStack(spacing: 10) {
                     ForEach(store.chats) { chat in
                         Button {
                             selectedChatID = chat.id
                         } label: {
-                            HStack(spacing: 12) {
-                                AvatarView(
-                                    value: chat.avatar,
-                                    size: 42
-                                )
+                            HStack(spacing: 14) {
+                                AvatarView(avatar: chat.avatar)
 
                                 Text(chat.name)
+                                    .font(.system(size: 16, weight: .medium))
                                     .foregroundStyle(.primary)
+
+                                Spacer()
+
+                                Image(systemName: "chevron.right")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                             }
+                            .padding(14)
+                            .liquidGlass(
+                                in: RoundedRectangle(cornerRadius: 20)
+                            )
                         }
                         .buttonStyle(.plain)
                     }
                 }
-            }
-            .navigationTitle("通讯录")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    AddContactButton()
-                }
+                .padding(.horizontal, 16)
             }
         }
     }
 
-    private var discoverPage: some View {
-        NavigationStack {
-            List {
-                NavigationLink {
-                    MomentsView()
-                } label: {
-                    Label(
-                        "朋友圈",
-                        systemImage: "photo.on.rectangle.angled"
-                    )
-                }
-
-                Label(
-                    "视频号",
-                    systemImage: "play.rectangle"
-                )
-                Label("扫一扫", systemImage: "qrcode.viewfinder")
-                Label("摇一摇", systemImage: "iphone.gen3.radiowaves.left.and.right")
-                Label("看一看", systemImage: "safari")
-                Label("搜一搜", systemImage: "magnifyingglass")
-            }
-            .navigationTitle("发现")
-        }
-    }
+    // MARK: Profile
 
     private var profilePage: some View {
-        NavigationStack {
-            List {
-                HStack(spacing: 16) {
-                    AvatarView(value: "🙂", size: 68)
+        VStack(spacing: 22) {
+            header(title: "个人中心")
 
-                    VStack(alignment: .leading, spacing: 7) {
-                        Text("我的微信")
-                            .font(.title2)
-                            .bold()
+            HStack(spacing: 16) {
+                AvatarView(
+                    avatar: "😊",
+                    size: 72
+                )
 
-                        Text("微信号：demo_310")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("微信演示用户")
+                        .font(.title2.bold())
 
-                    Spacer()
-
-                    Image(systemName: "chevron.right")
+                    Text("微信号：WeChatDemo")
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
-                .padding(.vertical, 12)
 
-                Section {
-                    Label("服务", systemImage: "creditcard")
-                    Label("收藏", systemImage: "star")
-                    Label("朋友圈", systemImage: "photo")
-                    Label("卡包", systemImage: "wallet.pass")
-                }
+                Spacer()
 
-                Section {
-                    Label("设置", systemImage: "gearshape")
+                Image(systemName: "chevron.right")
+                    .foregroundStyle(.secondary)
+            }
+            .padding(20)
+            .liquidGlass(
+                in: RoundedRectangle(cornerRadius: 25)
+            )
+            .padding(.horizontal, 16)
+
+            VStack(spacing: 0) {
+                profileItem("收藏", icon: "star.fill")
+                Divider().padding(.leading, 55)
+                profileItem("朋友圈", icon: "photo.fill")
+                Divider().padding(.leading, 55)
+                profileItem("设置", icon: "gearshape.fill")
+                Divider().padding(.leading, 55)
+                profileItem("关于", icon: "info.circle.fill")
+            }
+            .padding(.horizontal, 16)
+            .liquidGlass(
+                in: RoundedRectangle(cornerRadius: 24)
+            )
+
+            Spacer()
+        }
+    }
+
+    private func profileItem(
+        _ title: String,
+        icon: String
+    ) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: icon)
+                .foregroundStyle(.blue)
+                .frame(width: 25)
+
+            Text(title)
+                .foregroundStyle(.primary)
+
+            Spacer()
+
+            Image(systemName: "chevron.right")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(16)
+    }
+
+    // MARK: Common Header
+
+    private func header(
+        title: String,
+        action: (() -> Void)? = nil
+    ) -> some View {
+        HStack {
+            Text(title)
+                .font(.system(size: 27, weight: .bold))
+
+            Spacer()
+
+            if let action {
+                Button(action: action) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 42, height: 42)
+                        .liquidGlass(
+                            in: Circle()
+                        )
                 }
             }
-            .navigationTitle("我")
         }
+        .padding(.horizontal, 20)
+        .padding(.top, 12)
+    }
+
+    private var searchBar: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+
+            TextField("搜索聊天", text: $searchText)
+                .textInputAutocapitalization(.never)
+        }
+        .padding(13)
+        .liquidGlass(
+            in: RoundedRectangle(cornerRadius: 16)
+        )
+        .padding(.horizontal, 16)
+    }
+
+    // MARK: Bottom Bar
+
+    private var bottomBar: some View {
+        HStack(spacing: 0) {
+            ForEach(MainTab.allCases, id: \.self) { tab in
+                Button {
+                    withAnimation(.spring(response: 0.3)) {
+                        selectedTab = tab
+                    }
+                } label: {
+                    VStack(spacing: 5) {
+                        Image(systemName: tab.icon)
+                            .font(.system(size: 20))
+
+                        Text(tab.rawValue)
+                            .font(.system(size: 11))
+                    }
+                    .foregroundStyle(
+                        selectedTab == tab
+                        ? Color.green
+                        : Color.secondary
+                    )
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.top, 5)
+        .liquidGlass(
+            in: RoundedRectangle(cornerRadius: 27)
+        )
+        .padding(.horizontal, 16)
+        .padding(.bottom, 5)
     }
 }
 
-// MARK: - Chat List Row
+// MARK: - Chat Row
 
 struct ChatRow: View {
     let chat: DemoChat
 
     var body: some View {
-        HStack(spacing: 12) {
-            AvatarView(
-                value: chat.avatar,
-                size: 52
-            )
+        HStack(spacing: 13) {
+            AvatarView(avatar: chat.avatar)
 
-            VStack(alignment: .leading, spacing: 7) {
+            VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     Text(chat.name)
-                        .font(.system(
-                            size: 16,
-                            weight: .medium
-                        ))
+                        .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(.primary)
 
                     Spacer()
 
                     Text(chat.updatedAt, style: .time)
-                        .font(.caption)
+                        .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
 
                 Text(chat.lastMessage)
-                    .font(.subheadline)
+                    .font(.system(size: 13))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
-            .padding(.vertical, 5)
         }
-        .contentShape(Rectangle())
+        .padding(13)
+        .liquidGlass(
+            in: RoundedRectangle(cornerRadius: 21)
+        )
     }
 }
 
 // MARK: - Chat Detail
 
 struct ChatDetailView: View {
-    @EnvironmentObject private var store: ChatStore
+    @EnvironmentObject var store: ChatStore
     @Environment(\.dismiss) private var dismiss
 
     let chatID: UUID
@@ -549,59 +694,29 @@ struct ChatDetailView: View {
     @State private var selectedPhoto: PhotosPickerItem?
 
     private var chat: DemoChat? {
-        store.chats.first {
-            $0.id == chatID
-        }
+        store.chats.first(where: { $0.id == chatID })
     }
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                if let chat {
-                    ScrollViewReader { proxy in
-                        ScrollView {
-                            LazyVStack(spacing: 14) {
-                                ForEach(chat.messages) { message in
-                                    MessageBubble(message: message)
-                                        .id(message.id)
-                                }
-                            }
-                            .padding()
-                        }
-                        .background(
-                            Color(uiColor: .systemGroupedBackground)
-                        )
-                        .onChange(of: chat.messages.count) {
-                            if let last = chat.messages.last {
-                                withAnimation {
-                                    proxy.scrollTo(
-                                        last.id,
-                                        anchor: .bottom
-                                    )
-                                }
-                            }
-                        }
-                    }
+            ZStack {
+                AppBackground()
 
-                    messageInput
-                } else {
-                    ContentUnavailableView(
-                        "聊天不存在",
-                        systemImage: "message"
-                    )
+                VStack(spacing: 0) {
+                    messageList
+                    inputBar
                 }
             }
             .navigationTitle(chat?.name ?? "聊天")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("关闭") {
-                        dismiss()
-                    }
-                }
-
                 ToolbarItem(placement: .topBarTrailing) {
-                    Image(systemName: "ellipsis")
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
         }
@@ -612,7 +727,9 @@ struct ChatDetailView: View {
                 if let data = try? await item.loadTransferable(
                     type: Data.self
                 ) {
-                    store.sendImage(data, to: chatID)
+                    await MainActor.run {
+                        store.sendImage(data, to: chatID)
+                    }
                 }
 
                 selectedPhoto = nil
@@ -620,8 +737,38 @@ struct ChatDetailView: View {
         }
     }
 
-    private var messageInput: some View {
-        HStack(alignment: .bottom, spacing: 10) {
+    private var messageList: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 14) {
+                    if let chat {
+                        ForEach(chat.messages) { message in
+                            MessageBubble(message: message)
+                                .id(message.id)
+                        }
+                    }
+                }
+                .padding(16)
+            }
+            .onChange(
+                of: chat?.messages.count ?? 0
+            ) { _, _ in
+                guard let last = chat?.messages.last else {
+                    return
+                }
+
+                withAnimation {
+                    proxy.scrollTo(
+                        last.id,
+                        anchor: .bottom
+                    )
+                }
+            }
+        }
+    }
+
+    private var inputBar: some View {
+        HStack(spacing: 10) {
             PhotosPicker(
                 selection: $selectedPhoto,
                 matching: .images
@@ -631,176 +778,199 @@ struct ChatDetailView: View {
                     .foregroundStyle(.primary)
             }
 
-            TextField(
-                "输入消息...",
-                text: $messageText,
-                axis: .vertical
-            )
-            .lineLimit(1...4)
-            .padding(10)
-            .background(
-                Color(uiColor: .secondarySystemBackground)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            TextField("发送消息...", text: $messageText)
+                .padding(12)
+                .liquidGlass(
+                    in: RoundedRectangle(cornerRadius: 18)
+                )
 
-            Button("发送") {
+            Button {
                 store.sendText(
                     messageText,
                     to: chatID
                 )
                 messageText = ""
+            } label: {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 40, height: 40)
+                    .background(
+                        Color.green,
+                        in: Circle()
+                    )
             }
-            .fontWeight(.semibold)
             .disabled(
                 messageText.trimmingCharacters(
                     in: .whitespacesAndNewlines
                 ).isEmpty
             )
         }
-        .padding(.horizontal)
-        .padding(.vertical, 9)
-        .background(Color(uiColor: .systemBackground))
+        .padding(12)
+        .liquidGlass(
+            in: RoundedRectangle(cornerRadius: 25)
+        )
+        .padding(.horizontal, 12)
+        .padding(.bottom, 8)
     }
 }
 
 // MARK: - Message Bubble
 
 struct MessageBubble: View {
-    @EnvironmentObject private var store: ChatStore
-
     let message: DemoMessage
 
     var body: some View {
         HStack {
             if !message.incoming {
-                Spacer(minLength: 50)
+                Spacer(minLength: 45)
             }
 
             VStack(alignment: .leading, spacing: 5) {
-                if let url = store.imageURL(
-                    for: message.imagePath
-                ),
-                   let image = UIImage(contentsOfFile: url.path) {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(
-                            maxWidth: 210,
-                            maxHeight: 240
-                        )
-                        .clipShape(
-                            RoundedRectangle(cornerRadius: 10)
-                        )
-                }
-
-                if !message.text.isEmpty {
+                if let path = message.imagePath {
+                    if let image = UIImage(
+                        contentsOfFile: mediaPath(path)
+                    ) {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: 210)
+                            .clipShape(
+                                RoundedRectangle(cornerRadius: 14)
+                            )
+                    }
+                } else {
                     Text(message.text)
                         .foregroundStyle(.primary)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 9)
-                        .background(
-                            message.incoming
-                            ? Color(uiColor: .secondarySystemBackground)
-                            : Color(
-                                red: 0.60,
-                                green: 0.91,
-                                blue: 0.57
-                            )
-                        )
-                        .clipShape(
-                            RoundedRectangle(cornerRadius: 10)
-                        )
+                        .padding(12)
                 }
-
-                Text(message.time, style: .time)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
             }
+            .liquidGlass(
+                in: RoundedRectangle(cornerRadius: 17)
+            )
 
             if message.incoming {
-                Spacer(minLength: 50)
+                Spacer(minLength: 45)
             }
         }
-        .frame(maxWidth: .infinity)
+    }
+
+    private func mediaPath(_ name: String) -> String {
+        FileManager.default.urls(
+            for: .documentDirectory,
+            in: .userDomainMask
+        )[0]
+        .appendingPathComponent("Media")
+        .appendingPathComponent(name)
+        .path
     }
 }
 
 // MARK: - Moments
 
 struct MomentsView: View {
-    @EnvironmentObject private var store: ChatStore
+    @EnvironmentObject var store: ChatStore
+
+    @State private var showPublish = false
 
     var body: some View {
-        List {
-            ForEach(store.moments) { moment in
-                MomentRow(moment: moment)
-            }
-        }
-        .listStyle(.plain)
-        .navigationTitle("朋友圈")
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                NavigationLink {
-                    PublishMomentView()
+        VStack(spacing: 14) {
+            HStack {
+                Text("发现")
+                    .font(.system(size: 27, weight: .bold))
+
+                Spacer()
+
+                Button {
+                    showPublish = true
                 } label: {
-                    Image(systemName: "camera")
-                        .font(.title3)
+                    Image(systemName: "plus")
+                        .foregroundStyle(.primary)
+                        .frame(width: 42, height: 42)
+                        .liquidGlass(in: Circle())
                 }
             }
+            .padding(.horizontal, 20)
+            .padding(.top, 12)
+
+            ScrollView {
+                LazyVStack(spacing: 14) {
+                    if store.moments.isEmpty {
+                        Text("还没有朋友圈内容")
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 60)
+                    }
+
+                    ForEach(store.moments) { moment in
+                        MomentRow(moment: moment)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 20)
+            }
+        }
+        .sheet(isPresented: $showPublish) {
+            PublishMomentView()
+                .environmentObject(store)
         }
     }
 }
 
 struct MomentRow: View {
-    @EnvironmentObject private var store: ChatStore
-
     let moment: DemoMoment
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            AvatarView(
-                value: moment.avatar,
-                size: 44
-            )
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                AvatarView(avatar: "😊", size: 42)
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text(moment.name)
-                    .fontWeight(.semibold)
-                    .foregroundStyle(.blue)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("微信演示用户")
+                        .font(.system(size: 15, weight: .semibold))
 
-                if !moment.text.isEmpty {
-                    Text(moment.text)
+                    Text(moment.time, style: .date)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
-                if let url = store.imageURL(
-                    for: moment.imagePath
-                ),
-                   let image = UIImage(contentsOfFile: url.path) {
+                Spacer()
+            }
+
+            if !moment.text.isEmpty {
+                Text(moment.text)
+                    .font(.system(size: 15))
+                    .foregroundStyle(.primary)
+            }
+
+            if let path = moment.imagePath {
+                let url = FileManager.default.urls(
+                    for: .documentDirectory,
+                    in: .userDomainMask
+                )[0]
+                .appendingPathComponent("Media")
+                .appendingPathComponent(path)
+
+                if let image = UIImage(contentsOfFile: url.path) {
                     Image(uiImage: image)
                         .resizable()
                         .scaledToFit()
-                        .frame(
-                            maxWidth: 230,
-                            maxHeight: 240
-                        )
                         .clipShape(
-                            RoundedRectangle(cornerRadius: 8)
+                            RoundedRectangle(cornerRadius: 15)
                         )
                 }
-
-                Text(moment.time, style: .date)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
-
-            Spacer(minLength: 0)
         }
-        .padding(.vertical, 8)
+        .padding(15)
+        .liquidGlass(
+            in: RoundedRectangle(cornerRadius: 23)
+        )
     }
 }
 
+// MARK: - Publish Moment
+
 struct PublishMomentView: View {
-    @EnvironmentObject private var store: ChatStore
+    @EnvironmentObject var store: ChatStore
     @Environment(\.dismiss) private var dismiss
 
     @State private var text = ""
@@ -808,49 +978,69 @@ struct PublishMomentView: View {
     @State private var imageData: Data?
 
     var body: some View {
-        Form {
-            Section("分享内容") {
-                TextEditor(text: $text)
-                    .frame(minHeight: 150)
-            }
+        NavigationStack {
+            ZStack {
+                AppBackground()
 
-            Section("添加图片") {
-                PhotosPicker(
-                    selection: $selectedPhoto,
-                    matching: .images
-                ) {
-                    Label(
-                        "从相册选择图片",
-                        systemImage: "photo"
-                    )
+                VStack(spacing: 18) {
+                    TextEditor(text: $text)
+                        .frame(minHeight: 150)
+                        .scrollContentBackground(.hidden)
+                        .padding(12)
+                        .liquidGlass(
+                            in: RoundedRectangle(cornerRadius: 20)
+                        )
+
+                    PhotosPicker(
+                        selection: $selectedPhoto,
+                        matching: .images
+                    ) {
+                        Label(
+                            "选择朋友圈图片",
+                            systemImage: "photo"
+                        )
+                        .foregroundStyle(.primary)
+                        .frame(maxWidth: .infinity)
+                        .padding(16)
+                        .liquidGlass(
+                            in: RoundedRectangle(cornerRadius: 18)
+                        )
+                    }
+
+                    if let imageData,
+                       let image = UIImage(data: imageData) {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxHeight: 220)
+                            .clipShape(
+                                RoundedRectangle(cornerRadius: 16)
+                            )
+                    }
+
+                    Spacer()
+                }
+                .padding(16)
+            }
+            .navigationTitle("发表朋友圈")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("取消") {
+                        dismiss()
+                    }
                 }
 
-                if let imageData,
-                   let image = UIImage(data: imageData) {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(maxHeight: 220)
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("发表") {
+                        store.publishMoment(
+                            text,
+                            imageData: imageData
+                        )
+                        dismiss()
+                    }
+                    .fontWeight(.semibold)
                 }
-            }
-        }
-        .navigationTitle("发表朋友圈")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("发表") {
-                    store.publishMoment(
-                        text: text,
-                        imageData: imageData
-                    )
-                    dismiss()
-                }
-                .fontWeight(.semibold)
-                .disabled(
-                    text.trimmingCharacters(
-                        in: .whitespacesAndNewlines
-                    ).isEmpty && imageData == nil
-                )
             }
         }
         .onChange(of: selectedPhoto) { _, item in
@@ -865,57 +1055,26 @@ struct PublishMomentView: View {
     }
 }
 
-// MARK: - Add Contact
-
-struct AddContactButton: View {
-    @EnvironmentObject private var store: ChatStore
-
-    @State private var showingAlert = false
-    @State private var contactName = ""
-
-    var body: some View {
-        Button {
-            contactName = ""
-            showingAlert = true
-        } label: {
-            Image(systemName: "person.badge.plus")
-                .font(.title3)
-        }
-        .alert(
-            "添加联系人",
-            isPresented: $showingAlert
-        ) {
-            TextField(
-                "输入联系人名称",
-                text: $contactName
-            )
-
-            Button("取消", role: .cancel) {}
-
-            Button("添加") {
-                store.addContact(name: contactName)
-            }
-        } message: {
-            Text("添加后会出现在通讯录和聊天列表中。")
-        }
-    }
-}
-
 // MARK: - Avatar
 
 struct AvatarView: View {
-    let value: String
-    let size: CGFloat
+    let avatar: String
+    var size: CGFloat = 52
 
     var body: some View {
-        Text(value)
-            .font(.system(size: size * 0.55))
+        Text(avatar)
+            .font(.system(size: size * 0.48))
             .frame(width: size, height: size)
             .background(
-                Color(uiColor: .secondarySystemBackground)
+                Color.white.opacity(0.65),
+                in: RoundedRectangle(cornerRadius: size * 0.28)
             )
-            .clipShape(
-                RoundedRectangle(cornerRadius: size * 0.22)
-            )
+            .overlay {
+                RoundedRectangle(cornerRadius: size * 0.28)
+                    .stroke(
+                        Color.white.opacity(0.7),
+                        lineWidth: 1
+                    )
+            }
     }
 }
