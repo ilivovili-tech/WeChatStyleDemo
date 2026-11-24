@@ -26,7 +26,7 @@ struct DemoMessage: Identifiable, Codable {
     var text: String
     var incoming: Bool
     var time = Date()
-    var imagePath: String? = nil
+    var imagePath: String?
 }
 
 struct DemoChat: Identifiable, Codable {
@@ -40,7 +40,12 @@ struct DemoChat: Identifiable, Codable {
         guard let message = messages.last else {
             return "暂无消息"
         }
-        return message.imagePath == nil ? message.text : "[图片]"
+
+        if let path = message.imagePath, !path.isEmpty {
+            return "图片"
+        }
+
+        return message.text
     }
 }
 
@@ -60,51 +65,71 @@ struct SavedData: Codable {
 
 @MainActor
 final class ChatStore: ObservableObject {
+
     @Published var chats: [DemoChat] = []
     @Published var moments: [DemoMoment] = []
 
     private let fileName = "wechat_demo_data.json"
 
-    private var dataURL: URL {
+    private var documentsURL: URL {
         FileManager.default.urls(
             for: .documentDirectory,
             in: .userDomainMask
-        )[0].appendingPathComponent(fileName)
+        )[0]
+    }
+
+    private var dataURL: URL {
+        documentsURL.appendingPathComponent(fileName)
     }
 
     private var mediaDirectory: URL {
-        let url = FileManager.default.urls(
-            for: .documentDirectory,
-            in: .userDomainMask
-        )[0].appendingPathComponent("Media")
-
-        try? FileManager.default.createDirectory(
-            at: url,
-            withIntermediateDirectories: true
-        )
-
-        return url
+        documentsURL.appendingPathComponent("Media")
     }
 
     init() {
-        load()
+        createMediaDirectory()
+        loadData()
 
         if chats.isEmpty {
-            chats = [
-                DemoChat(
-                    name: "文件传输助手",
-                    avatar: "📁"
-                ),
-                DemoChat(
-                    name: "演示联系人",
-                    avatar: "😊"
-                )
-            ]
-            save()
+            createInitialData()
         }
     }
 
-    func load() {
+    private func createMediaDirectory() {
+        try? FileManager.default.createDirectory(
+            at: mediaDirectory,
+            withIntermediateDirectories: true
+        )
+    }
+
+    private func createInitialData() {
+        chats = [
+            DemoChat(
+                name: "文件传输助手",
+                avatar: "folder.fill",
+                messages: [
+                    DemoMessage(
+                        text: "欢迎使用微信风格演示应用",
+                        incoming: true
+                    )
+                ]
+            ),
+            DemoChat(
+                name: "ChatGPT",
+                avatar: "sparkles",
+                messages: [
+                    DemoMessage(
+                        text: "你好！有什么可以帮忙的？",
+                        incoming: true
+                    )
+                ]
+            )
+        ]
+
+        saveData()
+    }
+
+    func loadData() {
         guard
             let data = try? Data(contentsOf: dataURL),
             let saved = try? JSONDecoder().decode(
@@ -119,7 +144,7 @@ final class ChatStore: ObservableObject {
         moments = saved.moments
     }
 
-    func save() {
+    func saveData() {
         let saved = SavedData(
             chats: chats,
             moments: moments
@@ -129,117 +154,131 @@ final class ChatStore: ObservableObject {
             return
         }
 
-        try? data.write(to: dataURL, options: .atomic)
+        try? data.write(
+            to: dataURL,
+            options: .atomic
+        )
     }
 
-    func saveImage(_ data: Data) -> String? {
-        let name = UUID().uuidString + ".jpg"
-        let url = mediaDirectory.appendingPathComponent(name)
+    func saveImage(_ image: UIImage) -> String? {
+        createMediaDirectory()
 
-        guard let image = UIImage(data: data),
-              let compressed = image.jpegData(compressionQuality: 0.85)
-        else {
+        guard let data = image.jpegData(compressionQuality: 0.85) else {
             return nil
         }
 
+        let name = UUID().uuidString + ".jpg"
+        let url = mediaDirectory.appendingPathComponent(name)
+
         do {
-            try compressed.write(to: url)
+            try data.write(to: url, options: .atomic)
             return name
         } catch {
             return nil
         }
     }
 
-    func imageURL(_ name: String) -> URL {
-        mediaDirectory.appendingPathComponent(name)
+    func imageURL(for path: String?) -> URL? {
+        guard let path, !path.isEmpty else {
+            return nil
+        }
+
+        return mediaDirectory.appendingPathComponent(path)
     }
 
-    func addContact(_ name: String) {
-        let value = name.trimmingCharacters(
+    func addContact(name: String) {
+        let cleanName = name.trimmingCharacters(
             in: .whitespacesAndNewlines
         )
 
-        guard !value.isEmpty else { return }
+        guard !cleanName.isEmpty else {
+            return
+        }
 
-        guard !chats.contains(where: { $0.name == value }) else {
+        guard !chats.contains(where: {
+            $0.name.localizedCaseInsensitiveCompare(cleanName) == .orderedSame
+        }) else {
             return
         }
 
         chats.insert(
-            DemoChat(name: value, avatar: "👤"),
-            at: 0
-        )
-
-        save()
-    }
-
-    func sendText(_ text: String, to id: UUID) {
-        let value = text.trimmingCharacters(
-            in: .whitespacesAndNewlines
-        )
-
-        guard !value.isEmpty,
-              let index = chats.firstIndex(where: { $0.id == id })
-        else {
-            return
-        }
-
-        chats[index].messages.append(
-            DemoMessage(
-                text: value,
-                incoming: false
-            )
-        )
-
-        chats[index].updatedAt = Date()
-        moveChatToTop(id)
-        save()
-    }
-
-    func sendImage(_ data: Data, to id: UUID) {
-        guard let path = saveImage(data),
-              let index = chats.firstIndex(where: { $0.id == id })
-        else {
-            return
-        }
-
-        chats[index].messages.append(
-            DemoMessage(
-                text: "",
-                incoming: false,
-                imagePath: path
-            )
-        )
-
-        chats[index].updatedAt = Date()
-        moveChatToTop(id)
-        save()
-    }
-
-    func publishMoment(_ text: String, imageData: Data?) {
-        let path = imageData.flatMap { saveImage($0) }
-
-        let value = text.trimmingCharacters(
-            in: .whitespacesAndNewlines
-        )
-
-        guard !value.isEmpty || path != nil else {
-            return
-        }
-
-        moments.insert(
-            DemoMoment(
-                text: value,
-                imagePath: path
+            DemoChat(
+                name: cleanName,
+                avatar: "person.fill"
             ),
             at: 0
         )
 
-        save()
+        saveData()
+    }
+
+    func sendText(_ text: String, to chatID: UUID) {
+        guard let index = chats.firstIndex(where: {
+            $0.id == chatID
+        }) else {
+            return
+        }
+
+        let cleanText = text.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+
+        guard !cleanText.isEmpty else {
+            return
+        }
+
+        let message = DemoMessage(
+            text: cleanText,
+            incoming: false
+        )
+
+        chats[index].messages.append(message)
+        chats[index].updatedAt = Date()
+
+        moveChatToTop(chatID)
+        saveData()
+    }
+
+    func sendImage(_ image: UIImage, to chatID: UUID) {
+        guard let path = saveImage(image) else {
+            return
+        }
+
+        guard let index = chats.firstIndex(where: {
+            $0.id == chatID
+        }) else {
+            return
+        }
+
+        let message = DemoMessage(
+            text: "",
+            incoming: false,
+            imagePath: path
+        )
+
+        chats[index].messages.append(message)
+        chats[index].updatedAt = Date()
+
+        moveChatToTop(chatID)
+        saveData()
+    }
+
+    func publishMoment(text: String, image: UIImage?) {
+        let path = image.flatMap { saveImage($0) }
+
+        let moment = DemoMoment(
+            text: text,
+            imagePath: path
+        )
+
+        moments.insert(moment, at: 0)
+        saveData()
     }
 
     func moveChatToTop(_ id: UUID) {
-        guard let index = chats.firstIndex(where: { $0.id == id }) else {
+        guard let index = chats.firstIndex(where: {
+            $0.id == id
+        }) else {
             return
         }
 
@@ -248,17 +287,18 @@ final class ChatStore: ObservableObject {
     }
 
     func deleteChat(_ id: UUID) {
-        chats.removeAll { $0.id == id }
-        save()
+        chats.removeAll {
+            $0.id == id
+        }
+
+        saveData()
     }
 }
 
-// MARK: - Liquid Glass Style
+// MARK: - Liquid Glass
 
 extension View {
-    func liquidGlass<S: Shape>(
-        in shape: S
-    ) -> some View {
+    func liquidGlass<S: Shape>(in shape: S) -> some View {
         modifier(LiquidGlassModifier(shape: shape))
     }
 }
@@ -269,76 +309,77 @@ struct LiquidGlassModifier<S: Shape>: ViewModifier {
     @ViewBuilder
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
-            content.glassEffect(
-                .regular,
-                in: shape
-            )
+            content.glassEffect(.regular, in: shape)
         } else {
-            content.background(
-                .ultraThinMaterial,
-                in: shape
-            )
-            .overlay {
-                shape.stroke(
-                    Color.white.opacity(0.5),
-                    lineWidth: 1
-                )
-            }
+            content
+                .background(.ultraThinMaterial, in: shape)
+                .overlay {
+                    shape.stroke(
+                        Color.white.opacity(0.55),
+                        lineWidth: 1
+                    )
+                }
         }
     }
 }
 
+// MARK: - Background
+
 struct AppBackground: View {
     var body: some View {
-        ZStack {
-            Color(
-                red: 0.91,
-                green: 0.95,
-                blue: 0.99
-            )
-
-            LinearGradient(
-                colors: [
-                    Color.white.opacity(0.85),
-                    Color.blue.opacity(0.08),
-                    Color.purple.opacity(0.06)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        }
+        LinearGradient(
+            colors: [
+                Color(red: 0.94, green: 0.97, blue: 0.98),
+                Color(red: 0.96, green: 0.97, blue: 0.94),
+                Color(red: 0.94, green: 0.96, blue: 0.98)
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
         .ignoresSafeArea()
     }
 }
 
-// MARK: - Main Navigation
+// MARK: - Tabs
 
-enum MainTab: String, CaseIterable {
+enum MainTab: String, CaseIterable, Identifiable {
     case wechat = "微信"
     case contacts = "通讯录"
     case discover = "发现"
     case me = "我"
 
+    var id: String { rawValue }
+
     var icon: String {
         switch self {
-        case .wechat: return "message.fill"
-        case .contacts: return "person.2.fill"
-        case .discover: return "safari.fill"
-        case .me: return "person.crop.circle.fill"
+        case .wechat:
+            return "message.fill"
+        case .contacts:
+            return "person.2.fill"
+        case .discover:
+            return "safari.fill"
+        case .me:
+            return "person.crop.circle.fill"
         }
     }
 }
 
+// MARK: - Main View
+
 struct MainView: View {
+
     @EnvironmentObject var store: ChatStore
 
     @State private var selectedTab: MainTab = .wechat
     @State private var selectedChatID: UUID?
     @State private var searchText = ""
+
     @State private var showAddContact = false
     @State private var newContactName = ""
 
-    var filteredChats: [DemoChat] {
+    @Namespace private var tabAnimation
+
+    private var filteredChats: [DemoChat] {
         if searchText.isEmpty {
             return store.chats
         }
@@ -369,84 +410,71 @@ struct MainView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 25)
+                        .onEnded { value in
+                            handlePageSwipe(value)
+                        }
+                )
 
                 bottomBar
             }
         }
-        .sheet(
-            isPresented: Binding(
-                get: { selectedChatID != nil },
-                set: { value in
-                    if !value {
-                        selectedChatID = nil
-                    }
-                }
-            )
-        ) {
-            if let id = selectedChatID {
-                ChatDetailView(chatID: id)
-                    .environmentObject(store)
-            }
+        .sheet(item: $selectedChatID) { id in
+            ChatDetailView(chatID: id)
+                .environmentObject(store)
         }
         .alert("添加联系人", isPresented: $showAddContact) {
-            TextField("输入联系人名称", text: $newContactName)
+            TextField("请输入联系人名称", text: $newContactName)
 
             Button("取消", role: .cancel) {
                 newContactName = ""
             }
 
             Button("添加") {
-                store.addContact(newContactName)
+                store.addContact(name: newContactName)
                 newContactName = ""
             }
+        } message: {
+            Text("添加一个新的本地联系人")
         }
     }
 
     // MARK: Chat List
 
     private var chatList: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 0) {
             header(
                 title: "微信",
-                action: {
-                    showAddContact = true
-                }
-            )
+                trailingIcon: "plus"
+            ) {
+                showAddContact = true
+            }
 
             searchBar
 
-            if filteredChats.isEmpty {
-                Spacer()
-                Image(systemName: "message")
-                    .font(.system(size: 42))
-                    .foregroundStyle(.secondary)
-
-                Text("没有找到聊天")
-                    .foregroundStyle(.secondary)
-                Spacer()
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 10) {
-                        ForEach(filteredChats) { chat in
-                            Button {
-                                selectedChatID = chat.id
+            ScrollView {
+                LazyVStack(spacing: 12) {
+                    ForEach(filteredChats) { chat in
+                        Button {
+                            selectedChatID = chat.id
+                        } label: {
+                            ChatRow(chat: chat)
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            Button(role: .destructive) {
+                                store.deleteChat(chat.id)
                             } label: {
-                                ChatRow(chat: chat)
-                            }
-                            .buttonStyle(.plain)
-                            .contextMenu {
-                                Button(
-                                    "删除聊天",
-                                    role: .destructive
-                                ) {
-                                    store.deleteChat(chat.id)
-                                }
+                                Label("删除聊天", systemImage: "trash")
                             }
                         }
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 20)
                 }
+                .padding(.horizontal, 16)
+                .padding(.top, 14)
+                .padding(.bottom, 20)
             }
         }
     }
@@ -454,22 +482,49 @@ struct MainView: View {
     // MARK: Contacts
 
     private var contactsPage: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 0) {
             header(
                 title: "通讯录",
-                action: {
-                    showAddContact = true
-                }
-            )
+                trailingIcon: "plus"
+            ) {
+                showAddContact = true
+            }
+
+            searchBar
 
             ScrollView {
                 LazyVStack(spacing: 10) {
-                    ForEach(store.chats) { chat in
+                    Button {
+                        showAddContact = true
+                    } label: {
+                        ContactRow(
+                            name: "新的朋友",
+                            icon: "person.badge.plus",
+                            color: .orange
+                        )
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        showAddContact = true
+                    } label: {
+                        ContactRow(
+                            name: "添加联系人",
+                            icon: "person.crop.circle.badge.plus",
+                            color: .green
+                        )
+                    }
+                    .buttonStyle(.plain)
+
+                    ForEach(filteredChats) { chat in
                         Button {
                             selectedChatID = chat.id
                         } label: {
-                            HStack(spacing: 14) {
-                                AvatarView(avatar: chat.avatar)
+                            HStack(spacing: 12) {
+                                AvatarView(
+                                    name: chat.name,
+                                    size: 44
+                                )
 
                                 Text(chat.name)
                                     .font(.system(size: 16, weight: .medium))
@@ -478,18 +533,17 @@ struct MainView: View {
                                 Spacer()
 
                                 Image(systemName: "chevron.right")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.tertiary)
                             }
-                            .padding(14)
-                            .liquidGlass(
-                                in: RoundedRectangle(cornerRadius: 20)
-                            )
+                            .padding(12)
+                            .background(.white.opacity(0.55))
+                            .clipShape(RoundedRectangle(cornerRadius: 16))
                         }
                         .buttonStyle(.plain)
                     }
                 }
-                .padding(.horizontal, 16)
+                .padding(16)
             }
         }
     }
@@ -497,133 +551,146 @@ struct MainView: View {
     // MARK: Profile
 
     private var profilePage: some View {
-        VStack(spacing: 22) {
-            header(title: "个人中心")
+        VStack(spacing: 0) {
+            header(title: "我")
 
-            HStack(spacing: 16) {
-                AvatarView(
-                    avatar: "😊",
-                    size: 72
-                )
+            ScrollView {
+                VStack(spacing: 16) {
+                    HStack(spacing: 16) {
+                        AvatarView(
+                            name: "我",
+                            size: 76
+                        )
 
-                VStack(alignment: .leading, spacing: 7) {
-                    Text("微信演示用户")
-                        .font(.title2.bold())
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("微信用户")
+                                .font(.system(size: 22, weight: .bold))
 
-                    Text("微信号：WeChatDemo")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                            Text("微信号：WeChatDemo")
+                                .font(.system(size: 13))
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Spacer()
+
+                        Image(systemName: "qrcode")
+                            .font(.system(size: 22))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(18)
+                    .background(.white.opacity(0.65))
+                    .clipShape(RoundedRectangle(cornerRadius: 22))
+
+                    ProfileRow(
+                        icon: "wallet.pass.fill",
+                        title: "服务",
+                        color: .blue
+                    )
+
+                    ProfileRow(
+                        icon: "heart.fill",
+                        title: "收藏",
+                        color: .orange
+                    )
+
+                    ProfileRow(
+                        icon: "photo.fill",
+                        title: "朋友圈",
+                        color: .pink
+                    )
+
+                    ProfileRow(
+                        icon: "gearshape.fill",
+                        title: "设置",
+                        color: .gray
+                    )
+
+                    ProfileRow(
+                        icon: "info.circle.fill",
+                        title: "关于本应用",
+                        color: .green
+                    )
                 }
-
-                Spacer()
-
-                Image(systemName: "chevron.right")
-                    .foregroundStyle(.secondary)
+                .padding(16)
             }
-            .padding(20)
-            .liquidGlass(
-                in: RoundedRectangle(cornerRadius: 25)
-            )
-            .padding(.horizontal, 16)
-
-            VStack(spacing: 0) {
-                profileItem("收藏", icon: "star.fill")
-                Divider().padding(.leading, 55)
-                profileItem("朋友圈", icon: "photo.fill")
-                Divider().padding(.leading, 55)
-                profileItem("设置", icon: "gearshape.fill")
-                Divider().padding(.leading, 55)
-                profileItem("关于", icon: "info.circle.fill")
-            }
-            .padding(.horizontal, 16)
-            .liquidGlass(
-                in: RoundedRectangle(cornerRadius: 24)
-            )
-
-            Spacer()
         }
     }
 
-    private func profileItem(
-        _ title: String,
-        icon: String
-    ) -> some View {
-        HStack(spacing: 14) {
-            Image(systemName: icon)
-                .foregroundStyle(.blue)
-                .frame(width: 25)
-
-            Text(title)
-                .foregroundStyle(.primary)
-
-            Spacer()
-
-            Image(systemName: "chevron.right")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .padding(16)
-    }
-
-    // MARK: Common Header
+    // MARK: Header
 
     private func header(
         title: String,
+        trailingIcon: String? = nil,
         action: (() -> Void)? = nil
     ) -> some View {
         HStack {
             Text(title)
-                .font(.system(size: 27, weight: .bold))
+                .font(.system(size: 25, weight: .bold))
 
             Spacer()
 
-            if let action {
-                Button(action: action) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 17, weight: .semibold))
+            if let trailingIcon {
+                Button {
+                    action?()
+                } label: {
+                    Image(systemName: trailingIcon)
+                        .font(.system(size: 20, weight: .semibold))
                         .foregroundStyle(.primary)
                         .frame(width: 42, height: 42)
-                        .liquidGlass(
-                            in: Circle()
-                        )
+                        .background(.white.opacity(0.65))
+                        .clipShape(Circle())
                 }
             }
         }
         .padding(.horizontal, 20)
         .padding(.top, 12)
+        .padding(.bottom, 12)
     }
+
+    // MARK: Search
 
     private var searchBar: some View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
 
-            TextField("搜索聊天", text: $searchText)
-                .textInputAutocapitalization(.never)
+            TextField("搜索", text: $searchText)
+                .font(.system(size: 15))
+
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
-        .padding(13)
-        .liquidGlass(
-            in: RoundedRectangle(cornerRadius: 16)
-        )
+        .padding(12)
+        .background(.white.opacity(0.7))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
         .padding(.horizontal, 16)
+        .padding(.bottom, 8)
     }
 
     // MARK: Bottom Bar
 
     private var bottomBar: some View {
-        HStack(spacing: 0) {
-            ForEach(MainTab.allCases, id: \.self) { tab in
+        HStack(spacing: 5) {
+            ForEach(MainTab.allCases) { tab in
                 Button {
-                    withAnimation(.spring(response: 0.3)) {
-                        selectedTab = tab
-                    }
+                    switchTab(to: tab)
                 } label: {
                     VStack(spacing: 5) {
                         Image(systemName: tab.icon)
-                            .font(.system(size: 20))
+                            .font(.system(size: 20, weight: .semibold))
+                            .symbolEffect(
+                                .bounce,
+                                value: selectedTab == tab
+                            )
 
                         Text(tab.rawValue)
-                            .font(.system(size: 11))
+                            .font(.system(size: 11, weight: .medium))
                     }
                     .foregroundStyle(
                         selectedTab == tab
@@ -632,18 +699,76 @@ struct MainView: View {
                     )
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
-                    .contentShape(Rectangle())
+                    .background {
+                        if selectedTab == tab {
+                            Capsule()
+                                .fill(Color.green.opacity(0.12))
+                                .matchedGeometryEffect(
+                                    id: "selectedTabGlass",
+                                    in: tabAnimation
+                                )
+                        }
+                    }
+                    .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 8)
-        .padding(.top, 5)
-        .liquidGlass(
-            in: RoundedRectangle(cornerRadius: 27)
-        )
+        .padding(7)
+        .liquidGlass(in: Capsule())
         .padding(.horizontal, 16)
+        .padding(.top, 8)
         .padding(.bottom, 5)
+    }
+
+    // MARK: Tab Animation
+
+    private func switchTab(to tab: MainTab) {
+        guard selectedTab != tab else {
+            return
+        }
+
+        UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+
+        withAnimation(
+            .spring(
+                response: 0.42,
+                dampingFraction: 0.78
+            )
+        ) {
+            selectedTab = tab
+        }
+    }
+
+    // MARK: Swipe Navigation
+
+    private func handlePageSwipe(_ value: DragGesture.Value) {
+        let horizontal = value.translation.width
+        let vertical = value.translation.height
+
+        guard abs(horizontal) > abs(vertical) * 1.3 else {
+            return
+        }
+
+        guard abs(horizontal) > 65 else {
+            return
+        }
+
+        let tabs = MainTab.allCases
+
+        guard let currentIndex = tabs.firstIndex(of: selectedTab) else {
+            return
+        }
+
+        let nextIndex = horizontal < 0
+            ? currentIndex + 1
+            : currentIndex - 1
+
+        guard tabs.indices.contains(nextIndex) else {
+            return
+        }
+
+        switchTab(to: tabs[nextIndex])
     }
 }
 
@@ -654,37 +779,140 @@ struct ChatRow: View {
 
     var body: some View {
         HStack(spacing: 13) {
-            AvatarView(avatar: chat.avatar)
+            AvatarView(
+                name: chat.name,
+                size: 54
+            )
 
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text(chat.name)
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.primary)
-
-                    Spacer()
-
-                    Text(chat.updatedAt, style: .time)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                }
+            VStack(alignment: .leading, spacing: 7) {
+                Text(chat.name)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.primary)
 
                 Text(chat.lastMessage)
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
+
+            Spacer()
+
+            Text(chat.updatedAt, style: .time)
+                .font(.system(size: 11))
+                .foregroundStyle(.tertiary)
         }
         .padding(13)
-        .liquidGlass(
-            in: RoundedRectangle(cornerRadius: 21)
-        )
+        .background(.white.opacity(0.68))
+        .clipShape(RoundedRectangle(cornerRadius: 19))
+    }
+}
+
+// MARK: - Contact Row
+
+struct ContactRow: View {
+    let name: String
+    let icon: String
+    let color: Color
+
+    var body: some View {
+        HStack(spacing: 13) {
+            Image(systemName: icon)
+                .font(.system(size: 20))
+                .foregroundStyle(color)
+                .frame(width: 44, height: 44)
+                .background(color.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 13))
+
+            Text(name)
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(.primary)
+
+            Spacer()
+        }
+        .padding(12)
+        .background(.white.opacity(0.55))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+    }
+}
+
+// MARK: - Profile Row
+
+struct ProfileRow: View {
+    let icon: String
+    let title: String
+    let color: Color
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: icon)
+                .font(.system(size: 19))
+                .foregroundStyle(color)
+                .frame(width: 28)
+
+            Text(title)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(.primary)
+
+            Spacer()
+
+            Image(systemName: "chevron.right")
+                .font(.system(size: 12))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(17)
+        .background(.white.opacity(0.65))
+        .clipShape(RoundedRectangle(cornerRadius: 17))
+    }
+}
+
+// MARK: - Avatar
+
+struct AvatarView: View {
+    let name: String
+    var size: CGFloat = 48
+
+    private var avatarColor: Color {
+        let colors: [Color] = [
+            .blue,
+            .green,
+            .orange,
+            .purple,
+            .pink,
+            .teal
+        ]
+
+        let index = abs(name.hashValue) % colors.count
+        return colors[index]
+    }
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: size * 0.28)
+                .fill(avatarColor.opacity(0.15))
+
+            if name == "文件传输助手" {
+                Image(systemName: "folder.fill")
+                    .foregroundStyle(avatarColor)
+                    .font(.system(size: size * 0.42))
+            } else if name == "ChatGPT" {
+                Image(systemName: "sparkles")
+                    .foregroundStyle(avatarColor)
+                    .font(.system(size: size * 0.42))
+            } else {
+                Text(String(name.prefix(1)))
+                    .font(.system(size: size * 0.42, weight: .bold))
+                    .foregroundStyle(avatarColor)
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: size * 0.28))
     }
 }
 
 // MARK: - Chat Detail
 
 struct ChatDetailView: View {
+
     @EnvironmentObject var store: ChatStore
     @Environment(\.dismiss) private var dismiss
 
@@ -692,9 +920,12 @@ struct ChatDetailView: View {
 
     @State private var messageText = ""
     @State private var selectedPhoto: PhotosPickerItem?
+    @FocusState private var inputFocused: Bool
 
     private var chat: DemoChat? {
-        store.chats.first(where: { $0.id == chatID })
+        store.chats.first {
+            $0.id == chatID
+        }
     }
 
     var body: some View {
@@ -703,69 +934,65 @@ struct ChatDetailView: View {
                 AppBackground()
 
                 VStack(spacing: 0) {
-                    messageList
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            LazyVStack(spacing: 15) {
+                                if let chat {
+                                    ForEach(chat.messages) { message in
+                                        MessageBubble(message: message)
+                                            .id(message.id)
+                                    }
+                                }
+                            }
+                            .padding(16)
+                        }
+                        .onChange(of: chat?.messages.count ?? 0) {
+                            _, _ in
+
+                            guard let lastID = chat?.messages.last?.id else {
+                                return
+                            }
+
+                            withAnimation(.easeOut(duration: 0.25)) {
+                                proxy.scrollTo(
+                                    lastID,
+                                    anchor: .bottom
+                                )
+                            }
+                        }
+                    }
+
                     inputBar
                 }
             }
             .navigationTitle(chat?.name ?? "聊天")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("关闭") {
                         dismiss()
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.secondary)
                     }
                 }
             }
         }
         .onChange(of: selectedPhoto) { _, item in
-            guard let item else { return }
+            guard let item else {
+                return
+            }
 
             Task {
-                if let data = try? await item.loadTransferable(
-                    type: Data.self
-                ) {
+                if let data = try? await item.loadTransferable(type: Data.self),
+                   let image = UIImage(data: data) {
                     await MainActor.run {
-                        store.sendImage(data, to: chatID)
+                        store.sendImage(image, to: chatID)
+                        selectedPhoto = nil
                     }
                 }
-
-                selectedPhoto = nil
             }
         }
     }
 
-    private var messageList: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 14) {
-                    if let chat {
-                        ForEach(chat.messages) { message in
-                            MessageBubble(message: message)
-                                .id(message.id)
-                        }
-                    }
-                }
-                .padding(16)
-            }
-            .onChange(
-                of: chat?.messages.count ?? 0
-            ) { _, _ in
-                guard let last = chat?.messages.last else {
-                    return
-                }
-
-                withAnimation {
-                    proxy.scrollTo(
-                        last.id,
-                        anchor: .bottom
-                    )
-                }
-            }
-        }
-    }
+    // MARK: Input Bar
 
     private var inputBar: some View {
         HStack(spacing: 10) {
@@ -773,32 +1000,26 @@ struct ChatDetailView: View {
                 selection: $selectedPhoto,
                 matching: .images
             ) {
-                Image(systemName: "plus.circle")
-                    .font(.system(size: 27))
-                    .foregroundStyle(.primary)
+                Image(systemName: "photo")
+                    .font(.system(size: 23))
+                    .foregroundStyle(.green)
+                    .frame(width: 38, height: 42)
             }
 
-            TextField("发送消息...", text: $messageText)
-                .padding(12)
-                .liquidGlass(
-                    in: RoundedRectangle(cornerRadius: 18)
-                )
+            TextField("发送消息...", text: $messageText, axis: .vertical)
+                .font(.system(size: 15))
+                .lineLimit(1...4)
+                .padding(11)
+                .background(.white.opacity(0.85))
+                .clipShape(RoundedRectangle(cornerRadius: 16))
+                .focused($inputFocused)
 
             Button {
-                store.sendText(
-                    messageText,
-                    to: chatID
-                )
-                messageText = ""
+                sendMessage()
             } label: {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 17, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 40, height: 40)
-                    .background(
-                        Color.green,
-                        in: Circle()
-                    )
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.system(size: 31))
+                    .foregroundStyle(.green)
             }
             .disabled(
                 messageText.trimmingCharacters(
@@ -806,12 +1027,15 @@ struct ChatDetailView: View {
                 ).isEmpty
             )
         }
-        .padding(12)
-        .liquidGlass(
-            in: RoundedRectangle(cornerRadius: 25)
-        )
         .padding(.horizontal, 12)
-        .padding(.bottom, 8)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial)
+    }
+
+    private func sendMessage() {
+        store.sendText(messageText, to: chatID)
+        messageText = ""
+        inputFocused = false
     }
 }
 
@@ -821,92 +1045,136 @@ struct MessageBubble: View {
     let message: DemoMessage
 
     var body: some View {
-        HStack {
+        HStack(alignment: .top, spacing: 9) {
             if !message.incoming {
                 Spacer(minLength: 45)
             }
 
-            VStack(alignment: .leading, spacing: 5) {
-                if let path = message.imagePath {
-                    if let image = UIImage(
-                        contentsOfFile: mediaPath(path)
-                    ) {
-                        Image(uiImage: image)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(maxWidth: 210)
-                            .clipShape(
-                                RoundedRectangle(cornerRadius: 14)
-                            )
-                    }
+            if message.incoming {
+                AvatarView(name: "对方", size: 36)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                if let path = message.imagePath,
+                   let url = mediaURL(path),
+                   let image = UIImage(contentsOfFile: url.path) {
+
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: 210)
+                        .clipShape(RoundedRectangle(cornerRadius: 13))
+
                 } else {
                     Text(message.text)
+                        .font(.system(size: 15))
                         .foregroundStyle(.primary)
                         .padding(12)
+                        .background(
+                            message.incoming
+                            ? Color.white
+                            : Color.green.opacity(0.22)
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: 15))
                 }
+
+                Text(message.time, style: .time)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
             }
-            .liquidGlass(
-                in: RoundedRectangle(cornerRadius: 17)
-            )
 
             if message.incoming {
                 Spacer(minLength: 45)
+            } else {
+                AvatarView(name: "我", size: 36)
             }
         }
+        .frame(maxWidth: .infinity)
     }
 
-    private func mediaPath(_ name: String) -> String {
+    private func mediaURL(_ path: String) -> URL? {
         FileManager.default.urls(
             for: .documentDirectory,
             in: .userDomainMask
         )[0]
         .appendingPathComponent("Media")
-        .appendingPathComponent(name)
-        .path
+        .appendingPathComponent(path)
     }
 }
 
 // MARK: - Moments
 
 struct MomentsView: View {
-    @EnvironmentObject var store: ChatStore
 
+    @EnvironmentObject var store: ChatStore
     @State private var showPublish = false
 
     var body: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 0) {
             HStack {
                 Text("发现")
-                    .font(.system(size: 27, weight: .bold))
+                    .font(.system(size: 25, weight: .bold))
 
                 Spacer()
 
                 Button {
                     showPublish = true
                 } label: {
-                    Image(systemName: "plus")
+                    Image(systemName: "camera.fill")
+                        .font(.system(size: 19))
                         .foregroundStyle(.primary)
                         .frame(width: 42, height: 42)
-                        .liquidGlass(in: Circle())
+                        .background(.white.opacity(0.65))
+                        .clipShape(Circle())
                 }
             }
             .padding(.horizontal, 20)
-            .padding(.top, 12)
+            .padding(.vertical, 12)
 
             ScrollView {
-                LazyVStack(spacing: 14) {
-                    if store.moments.isEmpty {
-                        Text("还没有朋友圈内容")
-                            .foregroundStyle(.secondary)
-                            .padding(.top, 60)
-                    }
+                VStack(spacing: 14) {
+                    DiscoverRow(
+                        icon: "person.2.fill",
+                        title: "朋友圈",
+                        color: .green
+                    )
 
-                    ForEach(store.moments) { moment in
-                        MomentRow(moment: moment)
+                    DiscoverRow(
+                        icon: "play.rectangle.fill",
+                        title: "视频号",
+                        color: .pink
+                    )
+
+                    DiscoverRow(
+                        icon: "safari.fill",
+                        title: "扫一扫",
+                        color: .blue
+                    )
+
+                    DiscoverRow(
+                        icon: "gamecontroller.fill",
+                        title: "游戏",
+                        color: .orange
+                    )
+
+                    DiscoverRow(
+                        icon: "miniature.2",
+                        title: "小程序",
+                        color: .purple
+                    )
+
+                    if !store.moments.isEmpty {
+                        Text("最近朋友圈")
+                            .font(.system(size: 18, weight: .bold))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, 12)
+
+                        ForEach(store.moments) { moment in
+                            MomentRow(moment: moment)
+                        }
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 20)
+                .padding(16)
             }
         }
         .sheet(isPresented: $showPublish) {
@@ -916,112 +1184,147 @@ struct MomentsView: View {
     }
 }
 
+// MARK: - Discover Row
+
+struct DiscoverRow: View {
+    let icon: String
+    let title: String
+    let color: Color
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: icon)
+                .font(.system(size: 20))
+                .foregroundStyle(color)
+                .frame(width: 30)
+
+            Text(title)
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(.primary)
+
+            Spacer()
+
+            Image(systemName: "chevron.right")
+                .font(.system(size: 12))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(17)
+        .background(.white.opacity(0.68))
+        .clipShape(RoundedRectangle(cornerRadius: 17))
+    }
+}
+
+// MARK: - Moment Row
+
 struct MomentRow: View {
     let moment: DemoMoment
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                AvatarView(avatar: "😊", size: 42)
+        HStack(alignment: .top, spacing: 12) {
+            AvatarView(name: "我", size: 45)
 
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("微信演示用户")
-                        .font(.system(size: 15, weight: .semibold))
+            VStack(alignment: .leading, spacing: 9) {
+                Text("微信用户")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.blue)
 
-                    Text(moment.time, style: .date)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                if !moment.text.isEmpty {
+                    Text(moment.text)
+                        .font(.system(size: 15))
+                        .foregroundStyle(.primary)
                 }
 
-                Spacer()
-            }
-
-            if !moment.text.isEmpty {
-                Text(moment.text)
-                    .font(.system(size: 15))
-                    .foregroundStyle(.primary)
-            }
-
-            if let path = moment.imagePath {
-                let url = FileManager.default.urls(
-                    for: .documentDirectory,
-                    in: .userDomainMask
-                )[0]
-                .appendingPathComponent("Media")
-                .appendingPathComponent(path)
-
-                if let image = UIImage(contentsOfFile: url.path) {
+                if let path = moment.imagePath,
+                   let url = mediaURL(path),
+                   let image = UIImage(contentsOfFile: url.path) {
                     Image(uiImage: image)
                         .resizable()
                         .scaledToFit()
-                        .clipShape(
-                            RoundedRectangle(cornerRadius: 15)
-                        )
+                        .frame(maxWidth: 230)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+
+                HStack {
+                    Text(moment.time, style: .date)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+
+                    Spacer()
+
+                    Image(systemName: "ellipsis")
+                        .foregroundStyle(.secondary)
                 }
             }
         }
-        .padding(15)
-        .liquidGlass(
-            in: RoundedRectangle(cornerRadius: 23)
-        )
+        .padding(14)
+        .background(.white.opacity(0.65))
+        .clipShape(RoundedRectangle(cornerRadius: 17))
+    }
+
+    private func mediaURL(_ path: String) -> URL? {
+        FileManager.default.urls(
+            for: .documentDirectory,
+            in: .userDomainMask
+        )[0]
+        .appendingPathComponent("Media")
+        .appendingPathComponent(path)
     }
 }
 
 // MARK: - Publish Moment
 
 struct PublishMomentView: View {
+
     @EnvironmentObject var store: ChatStore
     @Environment(\.dismiss) private var dismiss
 
     @State private var text = ""
     @State private var selectedPhoto: PhotosPickerItem?
-    @State private var imageData: Data?
+    @State private var selectedImage: UIImage?
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                AppBackground()
-
-                VStack(spacing: 18) {
-                    TextEditor(text: $text)
-                        .frame(minHeight: 150)
-                        .scrollContentBackground(.hidden)
-                        .padding(12)
-                        .liquidGlass(
-                            in: RoundedRectangle(cornerRadius: 20)
-                        )
-
-                    PhotosPicker(
-                        selection: $selectedPhoto,
-                        matching: .images
-                    ) {
-                        Label(
-                            "选择朋友圈图片",
-                            systemImage: "photo"
-                        )
-                        .foregroundStyle(.primary)
-                        .frame(maxWidth: .infinity)
-                        .padding(16)
-                        .liquidGlass(
-                            in: RoundedRectangle(cornerRadius: 18)
-                        )
+            VStack(spacing: 18) {
+                TextEditor(text: $text)
+                    .frame(minHeight: 150)
+                    .padding(8)
+                    .background(.white.opacity(0.75))
+                    .clipShape(RoundedRectangle(cornerRadius: 15))
+                    .overlay(alignment: .topLeading) {
+                        if text.isEmpty {
+                            Text("这一刻的想法...")
+                                .foregroundStyle(.tertiary)
+                                .padding(.horizontal, 13)
+                                .padding(.vertical, 16)
+                                .allowsHitTesting(false)
+                        }
                     }
 
-                    if let imageData,
-                       let image = UIImage(data: imageData) {
-                        Image(uiImage: image)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(maxHeight: 220)
-                            .clipShape(
-                                RoundedRectangle(cornerRadius: 16)
-                            )
-                    }
-
-                    Spacer()
+                if let selectedImage {
+                    Image(uiImage: selectedImage)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxHeight: 200)
+                        .clipShape(RoundedRectangle(cornerRadius: 13))
                 }
-                .padding(16)
+
+                PhotosPicker(
+                    selection: $selectedPhoto,
+                    matching: .images
+                ) {
+                    Label("选择照片", systemImage: "photo")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(.green)
+                        .frame(maxWidth: .infinity)
+                        .padding(14)
+                        .background(.white.opacity(0.75))
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                }
+
+                Spacer()
             }
+            .padding(16)
+            .background(AppBackground())
             .navigationTitle("发表朋友圈")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1034,47 +1337,34 @@ struct PublishMomentView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("发表") {
                         store.publishMoment(
-                            text,
-                            imageData: imageData
+                            text: text,
+                            image: selectedImage
                         )
                         dismiss()
                     }
-                    .fontWeight(.semibold)
+                    .fontWeight(.bold)
+                    .disabled(
+                        text.trimmingCharacters(
+                            in: .whitespacesAndNewlines
+                        ).isEmpty && selectedImage == nil
+                    )
                 }
             }
         }
         .onChange(of: selectedPhoto) { _, item in
-            guard let item else { return }
+            guard let item else {
+                return
+            }
 
             Task {
-                imageData = try? await item.loadTransferable(
-                    type: Data.self
-                )
+                if let data = try? await item.loadTransferable(type: Data.self),
+                   let image = UIImage(data: data) {
+                    await MainActor.run {
+                        selectedImage = image
+                        selectedPhoto = nil
+                    }
+                }
             }
         }
-    }
-}
-
-// MARK: - Avatar
-
-struct AvatarView: View {
-    let avatar: String
-    var size: CGFloat = 52
-
-    var body: some View {
-        Text(avatar)
-            .font(.system(size: size * 0.48))
-            .frame(width: size, height: size)
-            .background(
-                Color.white.opacity(0.65),
-                in: RoundedRectangle(cornerRadius: size * 0.28)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: size * 0.28)
-                    .stroke(
-                        Color.white.opacity(0.7),
-                        lineWidth: 1
-                    )
-            }
     }
 }
