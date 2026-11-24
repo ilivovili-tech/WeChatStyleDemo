@@ -1,3 +1,4 @@
+
 name: Build WeChatStyleDemo IPA
 
 on:
@@ -5,20 +6,34 @@ on:
   push:
     branches:
       - main
+      - develop-3.1
+
+permissions:
+  contents: read
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-26
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: Check files
+      - name: Check Xcode version
         run: |
+          set -euo pipefail
+          xcodebuild -version
+          xcodebuild -showsdks
+          xcodebuild -version | grep -E 'Xcode 26'
+
+      - name: Check project files
+        run: |
+          set -euo pipefail
           pwd
           ls -la
-          find . -maxdepth 3 -type f
+          test -f project.yml
+          test -f WeChatStyleDemo/MainView.swift
+          find . -maxdepth 4 -type f
 
       - name: Install XcodeGen
         run: |
@@ -26,29 +41,45 @@ jobs:
 
       - name: Generate Xcode project
         run: |
-          test -f project.yml
+          set -euo pipefail
           xcodegen generate --spec project.yml
+          test -d WeChatStyleDemo.xcodeproj
 
       - name: Build iOS app
         run: |
+          set -euo pipefail
+
           xcodebuild \
             -project WeChatStyleDemo.xcodeproj \
             -scheme WeChatStyleDemo \
             -configuration Release \
             -sdk iphoneos \
-            -derivedDataPath build \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$PWD/build" \
             CODE_SIGNING_ALLOWED=NO \
             build
 
       - name: Package IPA
         run: |
+          set -euo pipefail
+
+          APP_PATH="$PWD/build/Build/Products/Release-iphoneos/WeChatStyleDemo.app"
+
+          if [ ! -d "$APP_PATH" ]; then
+            echo "ERROR: WeChatStyleDemo.app not found"
+            exit 1
+          fi
+
           mkdir -p Payload
-          cp -R build/Build/Products/Release-iphoneos/WeChatStyleDemo.app Payload/
-          cd Payload
-          zip -r ../WeChatStyleDemo-unsigned.ipa WeChatStyleDemo.app
+          cp -R "$APP_PATH" Payload/
+          ditto -c -k --sequesterRsrc --keepParent \
+            Payload WeChatStyleDemo-unsigned.ipa
+
+          test -f WeChatStyleDemo-unsigned.ipa
+          ls -lh WeChatStyleDemo-unsigned.ipa
 
       - name: Upload IPA
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: WeChatStyleDemo-IPA
           path: WeChatStyleDemo-unsigned.ipa
