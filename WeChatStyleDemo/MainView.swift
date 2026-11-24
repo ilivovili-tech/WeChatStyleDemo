@@ -1,7 +1,11 @@
 
-import SwiftUI
-import PhotosUI
-import UIKit
+struct WeChatStyleDemoApp: App {
+    var body: some Scene {
+        WindowGroup {
+            MainView()
+        }
+    }
+}
 
 // MARK: - Models
 
