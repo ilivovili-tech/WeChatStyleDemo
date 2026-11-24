@@ -348,7 +348,9 @@ enum MainTab: String, CaseIterable, Identifiable {
     case discover = "发现"
     case me = "我"
 
-    var id: String { rawValue }
+    var id: String {
+        rawValue
+    }
 
     var icon: String {
         switch self {
@@ -398,13 +400,10 @@ struct MainView: View {
                     switch selectedTab {
                     case .wechat:
                         chatList
-
                     case .contacts:
                         contactsPage
-
                     case .discover:
                         MomentsView()
-
                     case .me:
                         profilePage
                     }
@@ -421,9 +420,22 @@ struct MainView: View {
                 bottomBar
             }
         }
-        .sheet(item: $selectedChatID) { id in
-            ChatDetailView(chatID: id)
-                .environmentObject(store)
+        .sheet(
+            isPresented: Binding(
+                get: {
+                    selectedChatID != nil
+                },
+                set: { isPresented in
+                    if !isPresented {
+                        selectedChatID = nil
+                    }
+                }
+            )
+        ) {
+            if let id = selectedChatID {
+                ChatDetailView(chatID: id)
+                    .environmentObject(store)
+            }
         }
         .alert("添加联系人", isPresented: $showAddContact) {
             TextField("请输入联系人名称", text: $newContactName)
@@ -467,7 +479,10 @@ struct MainView: View {
                             Button(role: .destructive) {
                                 store.deleteChat(chat.id)
                             } label: {
-                                Label("删除聊天", systemImage: "trash")
+                                Label(
+                                    "删除聊天",
+                                    systemImage: "trash"
+                                )
                             }
                         }
                     }
@@ -538,7 +553,9 @@ struct MainView: View {
                             }
                             .padding(12)
                             .background(.white.opacity(0.55))
-                            .clipShape(RoundedRectangle(cornerRadius: 16))
+                            .clipShape(
+                                RoundedRectangle(cornerRadius: 16)
+                            )
                         }
                         .buttonStyle(.plain)
                     }
@@ -881,7 +898,7 @@ struct AvatarView: View {
             .teal
         ]
 
-        let index = abs(name.hashValue) % colors.count
+        let index = abs(name.hashValue % colors.count)
         return colors[index]
     }
 
@@ -1158,7 +1175,7 @@ struct MomentsView: View {
                     )
 
                     DiscoverRow(
-                        icon: "miniature.2",
+                        icon: "square.grid.2x2.fill",
                         title: "小程序",
                         color: .purple
                     )
@@ -1237,6 +1254,7 @@ struct MomentRow: View {
                 if let path = moment.imagePath,
                    let url = mediaURL(path),
                    let image = UIImage(contentsOfFile: url.path) {
+
                     Image(uiImage: image)
                         .resizable()
                         .scaledToFit()
@@ -1312,13 +1330,16 @@ struct PublishMomentView: View {
                     selection: $selectedPhoto,
                     matching: .images
                 ) {
-                    Label("选择照片", systemImage: "photo")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(.green)
-                        .frame(maxWidth: .infinity)
-                        .padding(14)
-                        .background(.white.opacity(0.75))
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                    Label(
+                        "选择照片",
+                        systemImage: "photo"
+                    )
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(.green)
+                    .frame(maxWidth: .infinity)
+                    .padding(14)
+                    .background(.white.opacity(0.75))
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
                 }
 
                 Spacer()
